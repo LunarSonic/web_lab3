@@ -1,4 +1,5 @@
 package web.filter;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.core.HttpHeaders;
@@ -11,12 +12,13 @@ import web.dto.MessageResponse;
 import web.exception.ApplicationError;
 import web.security.UserPrincipal;
 import web.utility.JwtUtil;
-
 import java.security.Principal;
 
 @Provider
 public class JwtFilter implements ContainerRequestFilter {
-    private final UserDAO userDAO = new UserDAO();
+    @Inject
+    private UserDAO userDAO;
+
     private final JwtUtil jwtUtil = new JwtUtil();
     private final String AUTH_SCHEME = "Bearer ";
 
