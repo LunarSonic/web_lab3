@@ -30,7 +30,7 @@ public class AuthResource {
         NewCookie newCookie = new NewCookie.Builder("refreshToken")
                 .value(tokens.refreshToken())
                 .path("/api")
-                .sameSite(NewCookie.SameSite.LAX)
+                .sameSite(NewCookie.SameSite.STRICT)
                 .httpOnly(true)
                 .maxAge(30*24*60*60)
                 .build();
@@ -51,7 +51,7 @@ public class AuthResource {
         NewCookie clearedCookie = new NewCookie.Builder("refreshToken")
                 .value("")
                 .path("/api")
-                .sameSite(NewCookie.SameSite.LAX)
+                .sameSite(NewCookie.SameSite.STRICT)
                 .httpOnly(true)
                 .maxAge(0)
                 .build();
