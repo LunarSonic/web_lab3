@@ -19,7 +19,9 @@ public class JwtFilter implements ContainerRequestFilter {
     @Inject
     private UserDAO userDAO;
 
-    private final JwtUtil jwtUtil = new JwtUtil();
+    @Inject
+    private JwtUtil jwtUtil;
+
     private final String AUTH_SCHEME = "Bearer ";
 
     @Override

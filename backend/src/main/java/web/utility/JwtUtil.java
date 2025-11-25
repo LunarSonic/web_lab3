@@ -4,8 +4,10 @@ import io.jsonwebtoken.security.Keys;
 import javax.crypto.SecretKey;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
+import jakarta.enterprise.context.ApplicationScoped;
 import web.entity.User;
 
+@ApplicationScoped
 public class JwtUtil {
     private static final long ACCESS_EXPIRATION_MS;
     private static final long REFRESH_EXPIRATION_MS;

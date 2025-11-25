@@ -14,7 +14,8 @@ public class AuthService {
     @Inject
     private UserDAO userDAO;
 
-    private final JwtUtil jwtUtil = new JwtUtil();
+    @Inject
+    private JwtUtil jwtUtil;
 
     public void register(String username, String password) {
         if (userDAO.findUserByUsername(username) != null) {
