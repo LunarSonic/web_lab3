@@ -3,7 +3,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.hibernate.Session;
 import org.hibernate.Transaction;
 import web.entity.User;
-import web.utility.HibernateStateUtil;
 import web.utility.HibernateUtil;
 
 @ApplicationScoped
@@ -26,21 +25,10 @@ public class UserDAO {
 
     public void saveNewUser(User user) {
         try (Session session = HibernateUtil.getSessionFactory().openSession()) {
-            System.out.println("Сессия открыта");
-            HibernateStateUtil.printEntityState(user, session);
-
             Transaction transaction = session.beginTransaction();
-            System.out.println("Транзакция началась");
-            HibernateStateUtil.printEntityState(user, session);
-
             session.persist(user);
-            System.out.println("После persist");
-            HibernateStateUtil.printEntityState(user, session);
-
             transaction.commit();
         }
-        System.out.println("После закрытия сессии");
-        HibernateStateUtil.printEntityState(user);
     }
 
     public void updateRefreshToken(Long userId, String newToken) {
