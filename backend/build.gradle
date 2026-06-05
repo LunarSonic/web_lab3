@@ -6,18 +6,39 @@ plugins {
 group 'web.lunarsonic'
 version '1.0-SNAPSHOT'
 
+import java.security.MessageDigest
+import org.gradle.process.ExecOperations
+import org.gradle.api.file.FileSystemOperations
+import javax.inject.Inject
+
 repositories {
   mavenCentral()
 }
 
-sourceCompatibility = '17'
-targetCompatibility = '17'
+def classesDir = layout.buildDirectory.dir('classes')
+def testClassesDir = layout.buildDirectory.dir('test-classes')
+def docsDir    = layout.buildDirectory.dir('docs')
+def tmpDir = layout.buildDirectory.dir('tmp-custom')
+def reportsDir = layout.buildDirectory.dir('test-reports')
 
-tasks.withType(JavaCompile).configureEach {
-  options.encoding = 'UTF-8'
+def jarBaseName = project.property('app.jarBaseName')
+def mainClassName = project.property('app.mainClass')
+def warName = "${jarBaseName}-${version}.war"
+
+def warFile = layout.buildDirectory.file("libs/${warName}")
+def manifestFile = layout.buildDirectory.file('tmp-custom/MANIFEST.MF')
+
+def javaSource = project.property('java.source')
+
+configurations {
+  junitCp
 }
 
 dependencies {
+  junitCp "org.junit.jupiter:junit-jupiter:${project.property('junit.jupiter.version')}"
+  junitCp "org.junit.platform:junit-platform-console-standalone:${project.property('junit.platform.version')}"
+  implementation "org.junit.jupiter:junit-jupiter:${project.property('junit.jupiter.version')}"
+
   compileOnly('jakarta.enterprise:jakarta.enterprise.cdi-api:4.1.0')
   compileOnly('jakarta.mvc:jakarta.mvc-api:2.1.0')
   compileOnly('jakarta.ws.rs:jakarta.ws.rs-api:4.0.0')
@@ -34,3 +55,394 @@ dependencies {
   implementation 'org.postgresql:postgresql:42.7.7'
 }
 
+interface Injected {
+  @Inject
+  ExecOperations getExec()
+  @Inject
+  FileSystemOperations getFs()
+}
+
+def injected = project.objects.newInstance(Injected)
+
+tasks.register('myCompile') {
+  group = 'lab3'
+  description = '1) Компиляция исходных кодов проекта'
+
+  inputs.files(fileTree('src/main/java'))
+  inputs.files(fileTree('src/main/resources'))
+  outputs.dir(classesDir)
+
+  doLast {
+    def outDir = classesDir.get().asFile
+    outDir.mkdirs()
+
+    def sources = fileTree('src/main/java')
+            .matching {
+              include '**/*.java'
+            }
+            .files*.absolutePath
+
+    if (sources.isEmpty()) {
+      throw new GradleException('Нет исходников в src/main/java')
+    }
+
+    def cpCompile = (configurations.compileClasspath.files +
+            configurations.annotationProcessor.files)
+            .collect {
+              it.absolutePath
+            }
+            .join(File.pathSeparator)
+
+    def procPath = configurations.annotationProcessor.files
+            .collect { it.absolutePath }
+            .join(File.pathSeparator)
+
+    injected.exec.exec {
+      commandLine(['javac',
+                   '-encoding', 'UTF-8',
+                   '--release', javaSource,
+                   '-cp', cpCompile,
+                   '--processor-path', procPath,
+                   '-d', outDir.absolutePath] + sources as List<String>)
+    }
+
+    if (file('src/main/resources').exists()) {
+      injected.fs.copy {
+        from 'src/main/resources'
+        into outDir
+      }
+    }
+  }
+}
+
+tasks.register('myBuild') {
+  group = 'lab3'
+  description = '2) Компиляция исходных кодов проекта и их упаковка в исполняемый jar-архив'
+
+  dependsOn 'myCompile'
+  inputs.dir(classesDir)
+  outputs.file(warFile)
+
+  doLast {
+    def outWar = warFile.get().asFile
+    def mf = manifestFile.get().asFile
+    outWar.parentFile.mkdirs()
+    mf.parentFile.mkdirs()
+
+    def stageDir = new File(layout.buildDirectory.get().asFile, 'war-stage')
+    stageDir.deleteDir()
+    stageDir.mkdirs()
+
+    def webInf = new File(stageDir, 'WEB-INF')
+    def webInfClasses = new File(webInf, 'classes')
+    def webInfLib = new File(webInf, 'lib')
+    webInfClasses.mkdirs()
+    webInfLib.mkdirs()
+
+    injected.fs.copy {
+      from classesDir
+      into webInfClasses
+    }
+
+    injected.fs.copy {
+      from configurations.runtimeClasspath
+      into webInfLib
+    }
+
+    mf.text = """Manifest-Version: 1.0
+Implementation-Version: ${version}
+Main-Class: ${mainClassName}
+"""
+    if (outWar.exists())
+      outWar.delete()
+    injected.exec.exec {
+      commandLine 'jar',
+              '--create',
+              '--file', outWar.absolutePath,
+              '--manifest', mf.absolutePath,
+              '-C', stageDir.absolutePath, '.'
+    }
+    println "Собран war: ${outWar}"
+  }
+}
+
+tasks.register('myClean') {
+  group = 'lab3'
+  description = '3) Удаление скомпилированных классов проекта и всех временных файлов'
+
+  doLast {
+    def b = layout.buildDirectory.get().asFile
+    if (b.exists()) {
+      b.deleteDir()
+      println "Удалён: $b"
+    }
+    fileTree(".") {
+      include '**/*.tmp'
+    }.each {
+      it.delete()
+    }
+  }
+}
+
+tasks.register('myTest') {
+  group = 'lab3'
+  description = '4) Запуск junit-тестов проекта'
+
+  dependsOn 'myBuild'
+  inputs.files(fileTree('src/test/java'))
+  inputs.files(fileTree('src/test/resources'))
+  outputs.dir(reportsDir)
+
+  doLast {
+    def mainOut = classesDir.get().asFile
+    def testOut = testClassesDir.get().asFile
+    def reportsOut = reportsDir.get().asFile
+    testOut.mkdirs()
+    reportsOut.mkdirs()
+
+    def junitJars = configurations.junitCp.files.collect {
+      it.absolutePath
+    }
+    def cpCompile = ([mainOut.absolutePath] + junitJars).join(File.pathSeparator)
+
+    def procPath = configurations.annotationProcessor.files
+            .collect { it.absolutePath }
+            .join(File.pathSeparator)
+
+    def testSources = fileTree('src/test/java')
+            .matching {
+              include '**/*.java'
+            }
+            .files*.absolutePath
+
+    if (testSources.isEmpty()) {
+      throw new GradleException('Нет тестов в src/test/java')
+    }
+    injected.exec.exec {
+      commandLine(['javac',
+                   '-encoding', 'UTF-8',
+                   '--release', javaSource,
+                   '-cp', cpCompile,
+                   '--processor-path', procPath,
+                   '-d', testOut.absolutePath] + testSources as List<String>)
+    }
+
+    if (file('src/test/resources').exists()) {
+      injected.fs.copy {
+        from 'src/test/resources'
+        into testOut
+      }
+    }
+
+    def cpRun = ([mainOut.absolutePath, testOut.absolutePath] + junitJars).join(File.pathSeparator)
+
+    injected.exec.exec {
+      commandLine 'java',
+              '-cp', cpRun,
+              'org.junit.platform.console.ConsoleLauncher',
+              'execute',
+              '--scan-class-path',
+              '--reports-dir', reportsOut.absolutePath,
+              '--details', 'tree'
+    }
+    println "Отчёты: $reportsOut"
+  }
+}
+
+tasks.register('doc') {
+  group = 'lab3'
+  description = '5) Добавление в MANIFEST.MF MD5 и SHA-1 файлов проекта, генерация и добавление в архив javadoc по всем классам проекта'
+
+  dependsOn 'myBuild'
+  inputs.file(warFile)
+  inputs.files(fileTree('src/main/java'))
+  outputs.file(warFile)
+
+  doLast {
+    def outWar = warFile.get().asFile
+    def docsOut = docsDir.get().asFile
+    def tmpOut = tmpDir.get().asFile
+    docsOut.mkdirs()
+    tmpOut.mkdirs()
+
+    def sources = fileTree('src/main/java')
+            .matching {
+              include '**/*.java'
+            }
+            .files*.absolutePath
+
+    injected.exec.exec {
+      ignoreExitValue = true
+      commandLine(['javadoc',
+                   '-encoding', 'UTF-8',
+                   '-charset', 'UTF-8',
+                   '-docencoding', 'UTF-8',
+                   '-d', docsOut.absolutePath,
+                   '-quiet'] + sources)
+    }
+    String md5 = hashFile(outWar, 'MD5')
+    String sha1 = hashFile(outWar, 'SHA-1')
+
+    def unpackDir = new File(tmpOut, 'war-unpack')
+    unpackDir.deleteDir()
+    unpackDir.mkdirs()
+    injected.fs.copy {
+      from zipTree(outWar)
+      into unpackDir
+    }
+
+    def mf = new File(unpackDir, 'META-INF/MANIFEST.MF')
+    mf.parentFile.mkdirs()
+    String text
+    if (mf.exists()) {
+      text = mf.text.replace('\r\n', '\n')
+      while (text.endsWith('\n')) {
+        text = text.substring(0, text.length() - 1)
+      }
+      text += '\n'
+    } else {
+      text = 'Manifest-Version: 1.0\n'
+    }
+
+    text += "MD5: ${md5}\n"
+    text += "SHA-1: ${sha1}\n"
+    text += '\n'
+
+    injected.fs.copy {
+      from docsOut
+      into new File(unpackDir, 'javadoc')
+    }
+
+    mf.text = text
+    outWar.delete()
+    injected.exec.exec {
+      commandLine 'jar',
+              '--create',
+              '--file', outWar.absolutePath,
+              '--manifest', mf.absolutePath,
+              '-C', unpackDir.absolutePath, '.'
+    }
+  }
+}
+
+tasks.register('scp') {
+  group = 'lab3'
+  description = '6) Перемещение собранного проекта по scp на выбранный сервер по завершению сборки'
+
+  dependsOn 'myBuild'
+
+  String user = project.findProperty('scp_user')
+  String host = project.findProperty('scp_host')
+  String dir  = project.findProperty('scp_targetDir')
+  String port = project.findProperty('scp_port')
+
+  doLast {
+    injected.exec.exec {
+      commandLine 'scp', '-P', port, warFile.get().asFile.absolutePath, "${user}@${host}:${dir}/"
+    }
+  }
+}
+
+tasks.register('history') {
+  group = 'lab3'
+  description = '7) Загрузка предыдущей версии из репозитория git, если проект не удаётся скомпилировать'
+
+  def maxSteps = (project.property('history.maxSteps') as Integer)
+
+  doLast {
+    int steps = 0
+    String lastBrokenSha = null
+    def gradleCmd = 'gradle'
+
+    while (true) {
+      def res = injected.exec.exec {
+        ignoreExitValue = true
+        environment '_JAVA_OPTIONS', project.property('history.jvmOptions')
+        commandLine gradleCmd, '--no-daemon', 'myCompile'
+      }
+
+      if (res.exitValue == 0) {
+        println "Компиляция прошла успешно после ${steps} откатов"
+        if (lastBrokenSha != null) {
+          def diffFile = new File(layout.buildDirectory.get().asFile, 'history-diff.patch')
+          diffFile.parentFile.mkdirs()
+          new ByteArrayOutputStream().withStream { os ->
+            injected.exec.exec {
+              commandLine 'git', 'diff', 'HEAD', lastBrokenSha
+              standardOutput = os
+            }
+            diffFile.text = os.toString("UTF-8")
+          }
+          println "Diff сохранён: ${diffFile}"
+        }
+        break
+      }
+
+      def shaOut = new ByteArrayOutputStream()
+      injected.exec.exec {
+        commandLine 'git', 'rev-parse', 'HEAD'
+        standardOutput = shaOut
+      }
+      lastBrokenSha = shaOut.toString().trim()
+
+      def parentCheck = injected.exec.exec {
+        ignoreExitValue = true
+        commandLine 'git', 'rev-parse', 'HEAD~1'
+      }
+      if (parentCheck.exitValue != 0) {
+        println 'Достигнута первая ревизия'
+        break
+      }
+      injected.exec.exec {
+        commandLine 'git', 'checkout', 'HEAD~1'
+      }
+      if (++steps > maxSteps) {
+        println "Лимит откатов (${maxSteps}) превышен"
+        break
+      }
+    }
+  }
+}
+
+tasks.register('report') {
+  group = 'lab3'
+  description = '8) Сохранение отчета junit в формате xml, добавляет его в репозиторий svn и выполняет commit'
+
+  dependsOn 'myTest'
+
+  File svnWc = file(project.property('svn_workingCopy'))
+  String svnUrl = project.property('svn_repoUrl')
+
+  doLast {
+    if (!svnWc.exists()) {
+      injected.exec.exec {
+        commandLine 'svn', 'checkout', svnUrl, svnWc.absolutePath
+      }
+    }
+    injected.fs.copy {
+      from reportsDir
+      into svnWc
+      include "**/*.xml"
+    }
+    injected.exec.exec {
+      workingDir svnWc
+      commandLine 'svn', 'add', '--force', '.'
+    }
+    injected.exec.exec {
+      workingDir svnWc
+      commandLine 'svn', 'commit', '-m', "JUnit report ${new Date()}"
+    }
+  }
+}
+
+static String hashFile(File f, String alg) {
+  def md = MessageDigest.getInstance(alg)
+  f.withInputStream { is ->
+    byte[] buf = new byte[8192]
+    int n
+    while ((n = is.read(buf)) > 0)
+      md.update(buf, 0, n)
+  }
+  md.digest().collect {
+    String.format('%02x', it) }.join()
+}

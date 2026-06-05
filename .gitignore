@@ -5,6 +5,7 @@ build/
 !**/src/test/**/build/
 
 .env
+backend/deploy.env
 
 .idea
 .idea/

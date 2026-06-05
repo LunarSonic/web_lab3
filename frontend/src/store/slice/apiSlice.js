@@ -2,7 +2,7 @@ import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
 import {logoutUser, updateAccessToken} from "./authSlice";
 
 const baseQuery = fetchBaseQuery({
-    baseUrl: '/api',
+    baseUrl: process.env.REACT_APP_API_URL,
     credentials: 'include',
     prepareHeaders: (headers, {getState}) => {
         headers.set('Content-Type', 'application/json');
